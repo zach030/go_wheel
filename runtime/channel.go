@@ -39,6 +39,7 @@ type GoChan struct {
 }
 
 func NewGoChan(typ string, size uint) *GoChan {
+	fmt.Printf("[Channel] new channel with type:%v size:%v is created now!\n", typ, size)
 	return &GoChan{
 		queueSize:   size,
 		remainSize:  size,
@@ -75,7 +76,7 @@ func (g *GoChan) Send(goRoutine *GoRoutine, data interface{}) {
 			return
 		}
 		// 被阻塞的goroutine接收此data
-		headG.Recv(g, data)
+		headG.BlockRecv(g, data)
 		return
 	} else {
 		// 如果接收阻塞队列为空
@@ -85,31 +86,46 @@ func (g *GoChan) Send(goRoutine *GoRoutine, data interface{}) {
 			return
 		}
 		// 缓冲区有空余位置
-		g.buf = append(g.buf, v)
-		fmt.Printf("GoRoutine ID:%v success send data:%v to channel:%+v\n", goRoutine.ID, v, g)
+		g.addDataToBuf(data)
+		fmt.Printf("GoRoutine ID:%v success send data:%v to channel\n", goRoutine.ID, v)
 	}
 }
 
-// 从GoChan里读数据
-func (g *GoChan) Recv(routine *GoRoutine) interface{} {
+// goroutine 从 GoChan里读数据
+func (g *GoChan) Recv(routine *GoRoutine) {
+	// 1 判断发送消息阻塞队列是否为空
 	if !g.sendQ.isEmpty() {
-		// 发送阻塞队列不为空
-		if len(g.buf) == 0 {
-			// 无缓冲区
-			headG, err := g.sendQ.get()
-			if err != nil {
-				fmt.Println("get send block queue failed,err:", err)
-				return nil
-			}
-
+		// 1.1 发送阻塞队列不为空
+		headG, err := g.sendQ.get()
+		if err != nil {
+			fmt.Println("get send block queue failed,err:", err)
+			return
 		}
+		if len(g.buf) == 0 {
+			// 1.2 无缓冲区，从发送消息阻塞队列中取一个go
+			// 1.3 取出这个go要发的数据，直接给routine接收
+			routine.WakeRecv(g, headG.DirectSend(g))
+			return
+		}
+		// 1.3 有缓冲区，则缓冲区已满，先从buf中取出一个队头数据给当前go
+		routine.WakeRecv(g, g.getDataFromBuf())
+		// 1.4 再从发送阻塞队列中取出队头，把队头的数据放入buf中
+		g.addDataToBuf(headG.DirectSend(g))
+		return
 	}
-	// 发送阻塞队列空
-	// 缓冲区有数据
-	if g.remainSize > 0 {
-		return g.buf[g.bufPointer]
+	// 2 发送阻塞队列为空
+	if g.isBufHasData() {
+		// 2.1 缓冲区有数据，直接读取buf中的第一个数据
+		routine.WakeRecv(g, g.getDataFromBuf())
+		return
 	}
-	return nil
+	// 2.2 缓冲区无数据，此goroutine被加入读取阻塞队列
+	g.recvQ.add(routine)
+	return
+}
+
+func (g *GoChan) isBufHasData() bool {
+	return g.remainSize != g.queueSize
 }
 
 // 判断buf是否有空闲位
@@ -117,7 +133,7 @@ func (g *GoChan) isBufFull() bool {
 	return g.remainSize == 0
 }
 
-// 从buf读数据
+// todo 从buf读数据
 func (g *GoChan) getDataFromBuf() interface{} {
 	if g.remainSize == g.queueSize {
 		// 缓冲区为空
@@ -126,9 +142,15 @@ func (g *GoChan) getDataFromBuf() interface{} {
 	}
 	// 读第一个元素
 	data := g.buf[0]
-	// 读指针前移
-	g.recvPos--
-
+	// 数组左移一位
+	newBuf := make([]int, g.queueSize)
+	copy(newBuf, g.buf[1:])
+	g.buf = newBuf
+	// 指针前移
+	g.bufPointer--
+	// 空闲数增加
+	g.remainSize++
+	fmt.Printf("[Channel] get data:%v from channel\n", data)
 	return data
 }
 
@@ -145,4 +167,6 @@ func (g *GoChan) addDataToBuf(data interface{}) {
 	g.bufPointer++
 	// 空闲数减少
 	g.remainSize--
+	fmt.Printf("[Channel] add data:%v to channel\n", data)
+	return
 }

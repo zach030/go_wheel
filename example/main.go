@@ -10,11 +10,10 @@ func main() {
 
 	g1 := runtime.NewGoroutine("1")
 	g2 := runtime.NewGoroutine("2")
-	//g3 := goroutine.NewGoroutine("3")
+	g3 := runtime.NewGoroutine("3")
 
 	g1.SendChannel(1, ch)
+	g3.SendChannel(3, ch)
 	data := g2.RecvChannel(ch)
-	//g3.SendChannel(3, ch)
-
 	fmt.Println(data)
 }
